@@ -3174,6 +3174,7 @@ blob_unmap_trigger(void **state)
 	MPI_Barrier(MPI_COMM_WORLD);
 }
 
+#define BUF_SIZE 10
 static void
 punch_then_lookup(void **state)
 {
@@ -3181,21 +3182,21 @@ punch_then_lookup(void **state)
 	daos_key_t	dkey;
 	test_arg_t	*arg = *state;
 	d_sg_list_t	sgl;
-	d_iov_t		sg_iovs[10];
+	d_iov_t		sg_iovs[BUF_SIZE];
 	daos_iod_t	iod;
-	daos_recx_t	recx[10];
+	daos_recx_t	recx[BUF_SIZE];
 	struct ioreq	req;
-	char		data_buf[10];
-	char		fetch_buf[10] = { 0 };
+	char		data_buf[BUF_SIZE];
+	char		fetch_buf[BUF_SIZE] = { 0 };
 	int		rc;
 	int		i;
 
 	oid = dts_oid_gen(dts_obj_class, 0, arg->myrank);
 	ioreq_init(&req, arg->coh, oid, DAOS_IOD_ARRAY, arg);
 
-	print_message("Insert 10 records\n");
-	memset(data_buf, 'a', 10);
-	for (i = 0; i < 10; i++)
+	print_message("Insert %d records\n", BUF_SIZE);
+	memset(data_buf, 'a', BUF_SIZE);
+	for (i = 0; i < BUF_SIZE; i++)
 		insert_single_with_rxnr("dkey", "akey", i, &data_buf[i],
 					1, 1, DAOS_TX_NONE, &req);
 
@@ -3203,20 +3204,20 @@ punch_then_lookup(void **state)
 	punch_rec_with_rxnr("dkey", "akey", 2, 1, DAOS_TX_NONE, &req);
 
 	print_message("Lookup non-punched records:\n");
-	memset(fetch_buf, 'b', 10);
-	for (i = 0; i < 10; i++) {
+	memset(fetch_buf, 'b', BUF_SIZE);
+	for (i = 0; i < BUF_SIZE; i++) {
 		daos_iov_set(&sg_iovs[i], &fetch_buf[i], 1);
 		recx[i].rx_idx = i;
 		recx[i].rx_nr = 1;
 	}
-	sgl.sg_nr = 10;
+	sgl.sg_nr = BUF_SIZE;
 	sgl.sg_nr_out = 0;
 	sgl.sg_iovs = sg_iovs;
 
 	daos_iov_set(&iod.iod_name, "akey", strlen("akey"));
 	daos_iov_set(&dkey, "dkey", strlen("dkey"));
 	daos_csum_set(&iod.iod_kcsum, NULL, 0);
-	iod.iod_nr	= 10;
+	iod.iod_nr	= BUF_SIZE;
 	iod.iod_size	= 1;
 	iod.iod_recxs	= recx;
 	iod.iod_eprs	= NULL;
@@ -3226,8 +3227,8 @@ punch_then_lookup(void **state)
 	rc = daos_obj_fetch(req.oh, DAOS_TX_NONE, &dkey, 1, &iod, &sgl, NULL,
 			    NULL);
 	assert_int_equal(rc, 0);
-	assert_int_equal(sgl.sg_nr_out, 10);
-	for (i = 0; i < 9; i++) {
+	assert_int_equal(sgl.sg_nr_out, BUF_SIZE);
+	for (i = 0; i < BUF_SIZE; i++) {
 		if (i == 2)
 			assert_memory_equal(&fetch_buf[i], "b", 1);
 		else

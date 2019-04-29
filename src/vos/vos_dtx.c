@@ -33,9 +33,11 @@
 
 /* Dummy offset for an aborted DTX address. */
 #define DTX_UMOFF_ABORTED		1
+D_CASSERT(DTX_UMOFF_ABORTED <= VOS_NUM_DTX_UMOFF_FLAGS);
 
 /* Dummy offset for some unknown DTX address. */
 #define DTX_UMOFF_UNKNOWN		2
+D_CASSERT(DTX_UMOFF_UNKNOWN <= VOS_NUM_DTX_UMOFF_FLAGS);
 
 static inline bool
 dtx_is_aborted(umem_off_t umoff)

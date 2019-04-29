@@ -59,6 +59,9 @@ extern struct dss_module_key vos_module_key;
 #define VOS_BLK_SZ		(1UL << VOS_BLK_SHIFT) /* bytes */
 #define VOS_BLOB_HDR_BLKS	1	/* block */
 
+/** Just for compile time checks that we don't try to overlap with dtx bits */
+#define VOS_NUM_DTX_UMOFF_FLAGS	2
+
 /** hash seed for murmur hash */
 #define VOS_BTR_MUR_SEED	0xC0FFEE
 /*

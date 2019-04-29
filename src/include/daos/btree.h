@@ -111,7 +111,10 @@ struct btr_root {
 	uint64_t			tr_feats;
 	/** generation, reserved for COW */
 	uint64_t			tr_gen;
-	/** pointer to root node (struct btr_node), UMOFF_NULL for empty tree */
+	/** btr_record for single entry
+	 *  root node (struct btr_node),
+	 *  UMOFF_NULL for empty tree
+	 */
 	umem_off_t			tr_node;
 };
 
