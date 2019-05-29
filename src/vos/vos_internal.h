@@ -40,6 +40,7 @@
 #include <daos_srv/bio.h>
 #include <vos_layout.h>
 #include <vos_obj.h>
+#include <vos_ilog.h>
 
 #define VOS_CONT_ORDER		20	/* Order of container tree */
 #define VOS_OBJ_ORDER		20	/* Order of object tree */
@@ -598,6 +599,8 @@ enum vos_tree_class {
 	VOS_BTR_DTX_TABLE	= (VOS_BTR_BEGIN + 5),
 	/** The objects with committable DTXs in DRAM */
 	VOS_BTR_DTX_COS		= (VOS_BTR_BEGIN + 6),
+	/** The VOS incarnation log tree */
+	VOS_BTR_ILOG		= (VOS_BTR_BEGIN + 7),
 	/** the last reserved tree class */
 	VOS_BTR_END,
 };

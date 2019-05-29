@@ -125,6 +125,8 @@ enum vos_dtx_record_types {
 	DTX_RT_KEY	= 2,
 	DTX_RT_SVT	= 3,
 	DTX_RT_EVT	= 4,
+	/* Special case for now */
+	DTX_RT_ILOG	= 5,
 };
 
 enum vos_dtx_record_flags {

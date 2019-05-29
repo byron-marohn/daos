@@ -1122,18 +1122,19 @@ vos_dtx_check_availability(struct umem_instance *umm, daos_handle_t coh,
 
 		if (obj->vo_oi_attr & VOS_OI_REMOVED)
 			hidden = true;
-		break;
 	}
+	break;
 	case DTX_RT_KEY: {
 		struct vos_krec_df	*key;
 
 		key = umem_off2ptr(umm, record);
 		if (key->kr_bmap & KREC_BF_REMOVED)
 			hidden = true;
-		break;
 	}
+	break;
 	case DTX_RT_SVT:
 	case DTX_RT_EVT:
+	case DTX_RT_ILOG:
 		break;
 	default:
 		D_ERROR("Unexpected DTX type %u\n", type);
