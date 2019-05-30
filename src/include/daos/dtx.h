@@ -24,6 +24,9 @@
 #ifndef __DAOS_DTX_H__
 #define __DAOS_DTX_H__
 
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <time.h>
 #include <uuid/uuid.h>
 

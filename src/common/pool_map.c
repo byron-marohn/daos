@@ -1813,8 +1813,8 @@ pool_map_find_failed_tgts(struct pool_map *map, struct pool_target **tgt_pp,
 }
 
 /**
- * Find all targets in DOWN state. Raft leader can use it drive target
- * rebuild one by one.
+ * Find all targets in UP state. (but not included in the pool for active I/O
+ * i.e. UP_IN). Raft leader can use it drive target reintegration/addition.
  */
 int
 pool_map_find_up_tgts(struct pool_map *map, struct pool_target **tgt_pp,

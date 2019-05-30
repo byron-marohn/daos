@@ -37,7 +37,7 @@
 #include "rpc.h"
 #include "rebuild_internal.h"
 
-#define RBLD_BCAST_INTV		2	/* seocnds interval to retry bcast */
+#define RBLD_BCAST_INTV		2	/* seconds interval to retry bcast */
 struct rebuild_global	rebuild_gst;
 
 struct pool_map *
@@ -787,6 +787,7 @@ static int
 rebuild_prepare(struct ds_pool *pool, uint32_t rebuild_ver,
 		uint64_t leader_term,
 		struct pool_target_id_list *exclude_tgts,
+		struct pool_target_id_list *include_tgts,
 		struct rebuild_global_pool_tracker **rgt)
 {
 	unsigned int	master_rank;
@@ -867,6 +868,7 @@ static int
 rebuild_scan_broadcast(struct ds_pool *pool,
 		       struct rebuild_global_pool_tracker *rgt,
 		       struct pool_target_id_list *tgts_failed,
+		       struct pool_target_id_list *tgts_added,
 		       d_rank_list_t *svc_list, uint32_t map_ver,
 		       d_iov_t *map_buf)
 {
@@ -966,7 +968,7 @@ retry:
 
 			rc = ds_rebuild_schedule(pool->sp_uuid,
 					pool_map_get_version(pool->sp_map),
-					&list, svc_list);
+					&list, NULL, svc_list);
 			if (rc != 0) {
 				D_ERROR("rebuild fails rc %d\n", rc);
 				break;
@@ -1064,7 +1066,8 @@ rebuild_task_destroy(struct rebuild_task *task)
 		return;
 
 	d_list_del(&task->dst_list);
-	pool_target_id_list_free(&task->dst_tgts);
+	pool_target_id_list_free(&task->dst_fail_tgts);
+	pool_target_id_list_free(&task->dst_add_tgts);
 	d_rank_list_free(task->dst_svc_list);
 	D_FREE(task);
 }
@@ -1076,6 +1079,7 @@ rebuild_task_destroy(struct rebuild_task *task)
 static int
 rebuild_leader_start(struct ds_pool *pool, uint32_t rebuild_ver,
 		     struct pool_target_id_list *tgts_failed,
+		     struct pool_target_id_list *tgts_added,
 		     d_rank_list_t *svc_list,
 		     struct rebuild_global_pool_tracker **p_rgt)
 {
@@ -1094,7 +1098,7 @@ rebuild_leader_start(struct ds_pool *pool, uint32_t rebuild_ver,
 	}
 
 	rc = rebuild_prepare(pool, rebuild_ver, leader_term, tgts_failed,
-			     p_rgt);
+			     tgts_added, p_rgt);
 	if (rc) {
 		D_ERROR("rebuild prepare failed: rc %d\n", rc);
 		D_GOTO(out, rc);
@@ -1107,8 +1111,8 @@ rebuild_leader_start(struct ds_pool *pool, uint32_t rebuild_ver,
 	}
 
 	/* broadcast scan RPC to all targets */
-	rc = rebuild_scan_broadcast(pool, *p_rgt, tgts_failed, svc_list,
-				    map_ver, &map_buf_iov);
+	rc = rebuild_scan_broadcast(pool, *p_rgt, tgts_failed, tgts_added,
+				    svc_list, map_ver, &map_buf_iov);
 	if (rc) {
 		D_ERROR("object scan failed: rc %d\n", rc);
 		D_GOTO(out, rc);
@@ -1139,8 +1143,9 @@ rebuild_task_ult(void *arg)
 	D_PRINT("Rebuild [started] (pool "DF_UUID" ver=%u)\n",
 		 DP_UUID(task->dst_pool_uuid), task->dst_map_ver);
 
-	rc = rebuild_leader_start(pool, task->dst_map_ver, &task->dst_tgts,
-				  task->dst_svc_list, &rgt);
+	rc = rebuild_leader_start(pool, task->dst_map_ver, &task->dst_fail_tgts,
+				  &task->dst_add_tgts, task->dst_svc_list,
+				  &rgt);
 	if (rc != 0) {
 		if (rc == -DER_CANCELED) {
 			D_DEBUG(DB_REBUILD, "pool "DF_UUID" ver %u rebuild is"
@@ -1172,10 +1177,21 @@ rebuild_task_ult(void *arg)
 		D_GOTO(out, rc);
 	}
 
-	rc = ds_pool_tgt_exclude_out(pool->sp_uuid, &task->dst_tgts);
-	D_DEBUG(DB_REBUILD, "mark failed target %d of "DF_UUID
-		" as DOWNOUT: %d\n", task->dst_tgts.pti_ids[0].pti_id,
-		DP_UUID(task->dst_pool_uuid), rc);
+	if (task->dst_fail_tgts.pti_number > 0) {
+		rc = ds_pool_tgt_exclude_out(pool->sp_uuid,
+					     &task->dst_fail_tgts);
+		D_DEBUG(DB_REBUILD, "mark failed target %d of "DF_UUID
+			" as DOWNOUT: %d\n",
+			task->dst_fail_tgts.pti_ids[0].pti_id,
+			DP_UUID(task->dst_pool_uuid), rc);
+	}
+
+	if (task->dst_add_tgts.pti_number > 0) {
+		rc = ds_pool_tgt_add_in(pool->sp_uuid, &task->dst_add_tgts);
+		D_DEBUG(DB_REBUILD, "mark added target %d of "DF_UUID
+			" as UPIN: %d\n", task->dst_add_tgts.pti_ids[0].pti_id,
+			DP_UUID(task->dst_pool_uuid), rc);
+	}
 
 	memset(&iv, 0, sizeof(iv));
 	uuid_copy(iv.riv_pool_uuid, task->dst_pool_uuid);
@@ -1344,6 +1360,21 @@ ds_rebuild_leader_stop_all()
 		ABT_cond_free(&rebuild_gst.rg_stop_cond);
 }
 
+static void
+rebuild_print_list_update(const char *const str, const uuid_t uuid,
+			  const uint32_t map_ver,
+			  struct pool_target_id_list *tgts) {
+	int i;
+
+	D_PRINT("%s (pool="DF_UUID" ver=%u) tgts=", str, DP_UUID(uuid),
+		map_ver);
+	for (i = 0; i < tgts->pti_number; i++) {
+		if (i > 0)
+			D_PRINT(",");
+		D_PRINT("%u", tgts->pti_ids[i].pti_id);
+	}
+}
+
 /**
  * Add rebuild task to the rebuild list and another ULT will rebuild the
  * pool.
@@ -1351,36 +1382,51 @@ ds_rebuild_leader_stop_all()
 int
 ds_rebuild_schedule(const uuid_t uuid, uint32_t map_ver,
 		    struct pool_target_id_list *tgts_failed,
+		    struct pool_target_id_list *tgts_added,
 		    d_rank_list_t *svc_list)
 {
-	struct rebuild_task	*task;
-	struct rebuild_task	*found = NULL;
-	int			rc;
+	struct rebuild_task     *task;
+	struct rebuild_task     *found = NULL;
+	int                     rc;
 
 	/* Check if the pool already in the queue list */
-	d_list_for_each_entry(task, &rebuild_gst.rg_queue_list,
-			      dst_list) {
+	d_list_for_each_entry(task, &rebuild_gst.rg_queue_list, dst_list) {
 		if (uuid_compare(task->dst_pool_uuid, uuid) == 0) {
 			found = task;
 			break;
 		}
 	}
 
+	if (task->dst_map_ver < map_ver)
+		task->dst_map_ver = map_ver;
+
 	if (found) {
-		/* Merge the failed ranks to existing rebuild task */
-		rc = pool_target_id_list_merge(&task->dst_tgts, tgts_failed);
-		if (rc)
-			return rc;
+		if (tgts_failed != NULL && tgts_failed->pti_number > 0) {
+			/* Merge the failed ranks to existing rebuild task */
+			rc = pool_target_id_list_merge(&task->dst_fail_tgts,
+						       tgts_failed);
+			if (rc)
+				return rc;
 
-		if (task->dst_map_ver < map_ver)
-			found->dst_map_ver = map_ver;
+			rebuild_print_list_update("Rebuild exclude queued",
+						  uuid, map_ver, tgts_failed);
+		}
 
-		D_PRINT("Rebuild [queued] ("DF_UUID" ver=%u) id %u\n",
-			DP_UUID(uuid), map_ver, tgts_failed->pti_ids[0].pti_id);
+		if (found && tgts_added != NULL && tgts_added->pti_number > 0) {
+			/* Merge the added ranks to existing rebuild task */
+			rc = pool_target_id_list_merge(&task->dst_add_tgts,
+						       tgts_added);
+			if (rc)
+				return rc;
+
+			rebuild_print_list_update("Rebuild add queued",
+						  uuid, map_ver, tgts_failed);
+		}
 
 		return 0;
 	}
 
+	/* No existing task was found - allocate a new one and use it */
 	D_ALLOC_PTR(task);
 	if (task == NULL)
 		return -DER_NOMEM;
@@ -1389,16 +1435,28 @@ ds_rebuild_schedule(const uuid_t uuid, uint32_t map_ver,
 	uuid_copy(task->dst_pool_uuid, uuid);
 	D_INIT_LIST_HEAD(&task->dst_list);
 
-	rc = pool_target_id_list_merge(&task->dst_tgts, tgts_failed);
-	if (rc)
-		D_GOTO(free, rc);
+	if (tgts_failed != NULL && tgts_failed->pti_number > 0) {
+		rc = pool_target_id_list_merge(&task->dst_fail_tgts,
+					       tgts_failed);
+		if (rc)
+			D_GOTO(free, rc);
+		rebuild_print_list_update("Rebuild exclude queued",
+					  uuid, map_ver, tgts_failed);
+	}
+
+	if (tgts_added != NULL && tgts_added->pti_number > 0) {
+		rc = pool_target_id_list_merge(&task->dst_add_tgts,
+					       tgts_added);
+		if (rc)
+			D_GOTO(free, rc);
+		rebuild_print_list_update("Rebuild add queued",
+					  uuid, map_ver, tgts_failed);
+	}
 
 	rc = daos_rank_list_dup(&task->dst_svc_list, svc_list);
 	if (rc)
 		D_GOTO(free, rc);
 
-	D_PRINT("Rebuild [queued] ("DF_UUID" ver=%u) id %u\n",
-		 DP_UUID(uuid), map_ver, tgts_failed->pti_ids[0].pti_id);
 	d_list_add_tail(&task->dst_list, &rebuild_gst.rg_queue_list);
 
 	if (!rebuild_gst.rg_rebuild_running) {
@@ -1425,18 +1483,22 @@ free:
 int
 ds_rebuild_regenerate_task(struct ds_pool *pool, d_rank_list_t *svc_list)
 {
+	/* DOWN targets that have not yet completed rebuild */
 	struct pool_target *down_tgts;
 	unsigned int	down_tgts_cnt;
+
+	/* UP targets that have not yet been enabled in the pool for use */
+	struct pool_target *up_tgts;
+	unsigned int	up_tgts_cnt;
 	unsigned int	i;
 	int		rc;
 
 	rebuild_gst.rg_abort = 0;
 
 	/* get all down targets */
-	rc = pool_map_find_down_tgts(pool->sp_map, &down_tgts,
-				     &down_tgts_cnt);
+	rc = pool_map_find_down_tgts(pool->sp_map, &down_tgts, &down_tgts_cnt);
 	if (rc != 0) {
-		D_ERROR("failed to create failed tgt list rc %d\n", rc);
+		D_ERROR("failed to create down tgt list rc %d\n", rc);
 		return rc;
 	}
 
@@ -1453,12 +1515,41 @@ ds_rebuild_regenerate_task(struct ds_pool *pool, d_rank_list_t *svc_list)
 		id_list.pti_number = 1;
 
 		rc = ds_rebuild_schedule(pool->sp_uuid, tgt->ta_comp.co_fseq,
-					 &id_list, svc_list);
+					 &id_list, NULL, svc_list);
 		if (rc) {
-			D_ERROR(DF_UUID" schedule ver %d failed: rc %d\n",
+			D_ERROR(DF_UUID" schedule down ver %d failed: rc %d\n",
 				DP_UUID(pool->sp_uuid), tgt->ta_comp.co_fseq,
 				rc);
-			break;
+			return rc;
+		}
+	}
+
+	/* get all up targets */
+	rc = pool_map_find_up_tgts(pool->sp_map, &up_tgts, &up_tgts_cnt);
+	if (rc != 0) {
+		D_ERROR("failed to create up tgt list rc %d\n", rc);
+		return rc;
+	}
+
+	if (up_tgts_cnt == 0)
+		return 0;
+
+	for (i = 0; i < up_tgts_cnt; i++) {
+		struct pool_target		*tgt = &up_tgts[i];
+		struct pool_target_id		tgt_id;
+		struct pool_target_id_list	id_list;
+
+		tgt_id.pti_id = tgt->ta_comp.co_id;
+		id_list.pti_ids = &tgt_id;
+		id_list.pti_number = 1;
+
+		rc = ds_rebuild_schedule(pool->sp_uuid, tgt->ta_comp.co_fseq,
+					 NULL, &id_list, svc_list);
+		if (rc) {
+			D_ERROR(DF_UUID" schedule add ver %d failed: rc %d\n",
+				DP_UUID(pool->sp_uuid), tgt->ta_comp.co_fseq,
+				rc);
+			return rc;
 		}
 	}
 
