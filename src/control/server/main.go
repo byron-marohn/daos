@@ -122,6 +122,13 @@ func serverMain() error {
 	go grpcServer.Serve(lis)
 	defer grpcServer.GracefulStop()
 
+	if err := mgmtControlServer.nvme.spdk.prep(
+		1024, config.UserName, ""); err != nil {
+
+		log.Errorf("Failed to prep nvme storage: %+v", err)
+		return err
+	}
+
 	// Wait for storage to be formatted if necessary and subsequently drop
 	// current process privileges to that of normal user.
 	if err = awaitStorageFormat(&config); err != nil {
