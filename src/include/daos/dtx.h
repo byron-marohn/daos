@@ -26,6 +26,7 @@
 
 #include <time.h>
 #include <uuid/uuid.h>
+#include <sys/syscall.h>
 
 /**
  * DAOS two-phase commit transaction identifier,
@@ -46,11 +47,25 @@ struct dtx_conflict_entry {
 static inline void
 daos_dti_gen(struct dtx_id *dti, bool zero)
 {
+	static __thread struct {
+		uint32_t	host_id;
+		uint32_t	thread_id;
+		uint64_t	hlc;
+	}			id;
+
 	if (zero) {
 		memset(dti, 0, sizeof(*dti));
 	} else {
 		/* It will be replaced by HLC when it is ready. */
-		uuid_generate(dti->dti_uuid);
+		/* uuid_generate() is too slow to generate the uuid for dti_uuid
+		 * now use {host_id, thread_id, hlc} to replace it.
+		 */
+		if (id.hlc == 0) {
+			id.host_id = gethostid();
+			id.thread_id = syscall(SYS_gettid);
+		};
+		id.hlc = crt_hlc_get();
+		memcpy(dti->dti_uuid, &id, sizeof(id));
 		dti->dti_sec = time(NULL);
 	}
 }
